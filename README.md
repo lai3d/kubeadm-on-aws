@@ -362,3 +362,7 @@ there is no kube-proxy.
   Karpenter, no node replacement if an instance dies.
 - **Single run of each scenario.** The results above come from a lab run, not
   from sustained operation.
+
+## License
+
+[MIT](LICENSE)
