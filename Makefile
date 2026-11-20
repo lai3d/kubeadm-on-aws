@@ -2,6 +2,9 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 # AWS profile/region come from your environment (AWS_PROFILE) - nothing is stored here.
+# Use the project-local Ansible if `uv venv` / `python -m venv .venv` was used.
+export PATH := $(CURDIR)/.venv/bin:$(PATH)
+
 TF        := terraform -chdir=terraform
 KEY       := .ssh/lab_ed25519
 ANSIBLE   ?= ansible-playbook

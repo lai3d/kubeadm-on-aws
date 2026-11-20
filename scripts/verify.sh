@@ -71,8 +71,19 @@ if k get ns monitoring >/dev/null 2>&1; then
   if [[ -n ${NLB:-} && -n $GRAFANA_HOST ]]; then
     echo "Grafana via NLB (Host: $GRAFANA_HOST): HTTP $(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Host: $GRAFANA_HOST" "http://$NLB/api/health")"
   fi
+  # Prometheus may have just been rescheduled (e.g. right after an upgrade):
+  # wait for it, and for every target to have been scraped at least once.
+  k -n monitoring rollout status sts/prometheus-kube-prometheus-stack-prometheus --timeout=300s >/dev/null
+  targets() {
+    k get --raw '/api/v1/namespaces/monitoring/services/kube-prometheus-stack-prometheus:9090/proxy/api/v1/targets?state=active' 2>/dev/null \
+      | jq -r '.data.activeTargets[] | "\(.health) \(.labels.job)"'
+  }
+  for _ in $(seq 1 18); do
+    T=$(targets || true)
+    [[ -n $T ]] && ! grep -q '^unknown' <<<"$T" && break
+    sleep 10
+  done
   echo "Prometheus scrape targets by health:"
-  k -n monitoring exec sts/prometheus-kube-prometheus-stack-prometheus -c prometheus -- \
-    wget -qO- 'http://localhost:9090/api/v1/targets?state=active' \
-    | jq -r '.data.activeTargets[] | "\(.health) \(.labels.job)"' | sort | uniq -c
+  sort <<<"$T" | uniq -c
+  echo "total: $(grep -c '^up' <<<"$T" || true) up, $(grep -vc '^up' <<<"$T" || true) not up"
 fi

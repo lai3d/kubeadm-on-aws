@@ -29,17 +29,15 @@
         var: before.stdout_lines
 
     - name: Back up etcd before touching anything
-      ansible.builtin.shell: |
-        set -euo pipefail
-        ETCD=$(crictl --runtime-endpoint unix:///run/containerd/containerd.sock ps -q --name etcd | head -1)
-        crictl --runtime-endpoint unix:///run/containerd/containerd.sock exec "$ETCD" etcdctl \
-          --endpoints=https://127.0.0.1:2379 \
-          --cacert=/etc/kubernetes/pki/etcd/ca.crt \
-          --cert=/etc/kubernetes/pki/etcd/server.crt \
-          --key=/etc/kubernetes/pki/etcd/server.key \
-          snapshot save /var/lib/etcd/pre-upgrade-{{ target }}.db
+      # /var/lib/etcd is a hostPath, so the snapshot lands on the node's disk.
+      ansible.builtin.command: >
+        {{ kubectl }} -n kube-system exec etcd-{{ node_name.stdout }} -- etcdctl
+        --endpoints=https://127.0.0.1:2379
+        --cacert=/etc/kubernetes/pki/etcd/ca.crt
+        --cert=/etc/kubernetes/pki/etcd/server.crt
+        --key=/etc/kubernetes/pki/etcd/server.key
+        snapshot save /var/lib/etcd/pre-upgrade-{{ target }}.db
       args:
-        executable: /bin/bash
         creates: "/var/lib/etcd/pre-upgrade-{{ target }}.db"
       register: etcd_backup
 
