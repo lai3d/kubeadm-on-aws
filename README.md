@@ -44,8 +44,7 @@ flowchart TB
     w2 --- ebs
 ```
 
-<details>
-<summary>Same diagram as plain text</summary>
+The same thing as plain text, for terminals and viewers without Mermaid:
 
 ```
                       workstation (terraform, ansible, curl)
@@ -66,8 +65,6 @@ flowchart TB
 │                                                       EBS gp3 volumes (CSI)  │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
-
-</details>
 
 | Layer | Choice |
 |-------|--------|
