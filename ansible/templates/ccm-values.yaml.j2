@@ -1,0 +1,14 @@
+image:
+  tag: "{{ ccm_tag }}"
+
+# The controller that un-taints nodes must not depend on the pod network or on
+# cluster DNS being up - run it on the host network of the control plane node.
+hostNetworking: true
+
+args:
+  - --v=2
+  - --cloud-provider=aws
+  # Pod routing is Cilium's job (VXLAN). Without this the controller tries to
+  # program VPC route tables and demands --cluster-cidr.
+  - --configure-cloud-routes=false
+  - --cluster-name={{ cluster_name }}

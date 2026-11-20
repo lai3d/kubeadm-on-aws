@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gateway
+---
+# Cilium turns this Gateway into an Envoy listener plus a Service of type
+# LoadBalancer; the AWS cloud controller then turns that Service into an NLB.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: public
+  namespace: gateway
+spec:
+  gatewayClassName: cilium
+  infrastructure:
+    # Copied onto the generated Service, where cloud-provider-aws reads them.
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: nlb
+      # Lab: only the admin CIDR may reach the load balancer.
+      service.beta.kubernetes.io/load-balancer-source-ranges: "{{ admin_cidr }}"
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: All
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: echo
+  namespace: demo
+spec:
+  parentRefs:
+    - name: public
+      namespace: gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: echo
+          port: 80

@@ -1,0 +1,81 @@
+---
+- name: Create a join token
+  hosts: control_plane
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Create a short-lived bootstrap token
+      ansible.builtin.command: kubeadm token create --ttl 30m --print-join-command
+      register: join_command
+      changed_when: false
+      no_log: true
+
+    - name: Extract token and CA hash
+      ansible.builtin.set_fact:
+        join_token: "{{ join_command.stdout | regex_search('--token (\\S+)', '\\1') | first }}"
+        ca_cert_hash: "{{ join_command.stdout | regex_search('--discovery-token-ca-cert-hash (\\S+)', '\\1') | first }}"
+      no_log: true
+
+- name: Join the workers
+  hosts: workers
+  become: true
+  gather_facts: false
+  vars:
+    join_token: "{{ hostvars[groups['control_plane'][0]].join_token }}"
+    ca_cert_hash: "{{ hostvars[groups['control_plane'][0]].ca_cert_hash }}"
+  tasks:
+    - name: Check whether this node already joined
+      ansible.builtin.stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf
+
+    - name: Render join config
+      ansible.builtin.template:
+        src: ../templates/kubeadm-join.yaml.j2
+        dest: /etc/kubernetes/kubeadm-join.yaml
+        mode: "0600"
+      when: not kubelet_conf.stat.exists
+      no_log: true
+
+    - name: kubeadm join
+      ansible.builtin.command: kubeadm join --config /etc/kubernetes/kubeadm-join.yaml
+      when: not kubelet_conf.stat.exists
+
+    - name: Remove the join config (it contains the bootstrap token)
+      ansible.builtin.file:
+        path: /etc/kubernetes/kubeadm-join.yaml
+        state: absent
+
+- name: Wait for the cluster to settle
+  hosts: control_plane
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Wait for all nodes to be Ready
+      ansible.builtin.command: >
+        {{ kubectl }} wait --for=condition=Ready nodes --all --timeout=300s
+      changed_when: false
+
+    - name: Wait until every node has been initialised by the cloud provider
+      ansible.builtin.shell: >
+        {{ kubectl }} get nodes -o json
+        | jq -e '(.items | length) == {{ groups['all'] | length }} and
+        ([.items[] | select(.spec.providerID == null)] | length == 0)'
+      register: nodes_ok
+      until: nodes_ok.rc == 0
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    - name: Label workers
+      ansible.builtin.shell: >
+        {{ kubectl }} label nodes -l '!node-role.kubernetes.io/control-plane'
+        node-role.kubernetes.io/worker= --overwrite
+      changed_when: false
+
+    - name: Wait for Cilium and CoreDNS everywhere
+      ansible.builtin.shell: |
+        {{ kubectl }} -n kube-system rollout status ds/cilium --timeout=300s
+        {{ kubectl }} -n kube-system rollout status deploy/cilium-operator --timeout=300s
+        {{ kubectl }} -n kube-system rollout status deploy/coredns --timeout=300s
+      changed_when: false

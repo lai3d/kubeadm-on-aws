@@ -1,0 +1,5 @@
+---
+# Extras on top of the MVP: persistent storage, an NLB-backed Gateway and monitoring.
+- import_playbook: playbooks/10-ebs-csi.yml
+- import_playbook: playbooks/11-gateway.yml
+- import_playbook: playbooks/12-monitoring.yml

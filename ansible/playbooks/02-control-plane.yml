@@ -1,0 +1,46 @@
+---
+- name: Bootstrap the control plane with kubeadm
+  hosts: control_plane
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Render kubeadm config
+      ansible.builtin.template:
+        src: ../templates/kubeadm-init.yaml.j2
+        dest: /etc/kubernetes/kubeadm-init.yaml
+        mode: "0600"
+
+    - name: kubeadm init
+      ansible.builtin.command: kubeadm init --config /etc/kubernetes/kubeadm-init.yaml
+      args:
+        creates: /etc/kubernetes/admin.conf
+      register: kubeadm_init
+
+    - name: Show kubeadm init output
+      ansible.builtin.debug:
+        var: kubeadm_init.stdout_lines
+      when: kubeadm_init.changed
+
+    - name: kubeconfig for the ubuntu user
+      ansible.builtin.shell: |
+        mkdir -p /home/ubuntu/.kube
+        cp /etc/kubernetes/admin.conf /home/ubuntu/.kube/config
+        chown -R ubuntu:ubuntu /home/ubuntu/.kube
+        chmod 600 /home/ubuntu/.kube/config
+      args:
+        creates: /home/ubuntu/.kube/config
+
+    - name: Install Helm
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl -fsSL https://get.helm.sh/helm-{{ helm_version }}-linux-amd64.tar.gz \
+          | tar -xz -C /usr/local/bin --strip-components=1 linux-amd64/helm
+      args:
+        executable: /bin/bash
+        creates: /usr/local/bin/helm
+
+    - name: Directory for manifests and Helm values
+      ansible.builtin.file:
+        path: /opt/lab
+        state: directory
+        mode: "0755"

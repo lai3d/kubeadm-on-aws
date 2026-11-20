@@ -1,0 +1,21 @@
+---
+# pkgs.k8s.io publishes one apt repository per Kubernetes minor version, so a
+# minor upgrade starts by pointing apt at the next repo. Expects `k8s_minor`.
+- name: "Kubernetes apt key (v{{ k8s_minor }})"
+  ansible.builtin.get_url:
+    url: "https://pkgs.k8s.io/core:/stable:/v{{ k8s_minor }}/deb/Release.key"
+    dest: /etc/apt/keyrings/kubernetes.asc
+    mode: "0644"
+    force: true
+
+- name: "Kubernetes apt repository (v{{ k8s_minor }})"
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/kubernetes.list
+    content: >
+      deb [signed-by=/etc/apt/keyrings/kubernetes.asc]
+      https://pkgs.k8s.io/core:/stable:/v{{ k8s_minor }}/deb/ /
+    mode: "0644"
+
+- name: Refresh apt cache
+  ansible.builtin.apt:
+    update_cache: true

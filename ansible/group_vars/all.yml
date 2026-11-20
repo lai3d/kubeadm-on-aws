@@ -1,0 +1,29 @@
+---
+# Kubernetes version installed by `make cluster`.
+kubernetes_version: "1.36.6"
+# Version `make upgrade` moves the cluster to (one minor at a time - kubeadm
+# does not support skipping minors).
+kubernetes_upgrade_version: "1.37.2"
+
+# Must not overlap the VPC CIDR (10.0.0.0/16). Cilium's default cluster-pool
+# is 10.0.0.0/8, which WOULD overlap - see README gotchas.
+pod_cidr: "10.244.0.0/16"
+service_cidr: "10.96.0.0/12"
+
+helm_version: "v4.3.2"
+cilium_version: "1.20.5"
+gateway_api_version: "v1.6.3" # the version Cilium 1.20 is built against
+
+# cloud-provider-aws follows the Kubernetes minor version.
+ccm_chart_version: "0.0.12"
+ccm_image_tag: "v1.36.1"
+ccm_upgrade_image_tag: "v1.37.0"
+
+ebs_csi_chart_version: "2.68.1"
+kube_prometheus_stack_version: "93.4.1"
+
+grafana_hostname: "grafana.kubeadm.lab"
+
+kubectl: "kubectl --kubeconfig /etc/kubernetes/admin.conf"
+helm_env:
+  KUBECONFIG: /etc/kubernetes/admin.conf

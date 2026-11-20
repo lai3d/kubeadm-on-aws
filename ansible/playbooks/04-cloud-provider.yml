@@ -1,0 +1,42 @@
+---
+# The piece EKS hides completely: the controller that tells Kubernetes it is
+# running on AWS. It sets providerID / zone labels on Nodes, removes the
+# "uninitialized" taint and creates NLBs for Services of type LoadBalancer.
+- name: Install the AWS cloud controller manager
+  hosts: control_plane
+  become: true
+  gather_facts: false
+  environment: "{{ helm_env }}"
+  tasks:
+    - name: Render CCM values
+      ansible.builtin.template:
+        src: ../templates/ccm-values.yaml.j2
+        dest: /opt/lab/ccm-values.yaml
+        mode: "0644"
+      vars:
+        ccm_tag: "{{ ccm_image_tag_override | default(ccm_image_tag) }}"
+
+    - name: Install aws-cloud-controller-manager
+      ansible.builtin.command: >
+        helm upgrade --install aws-cloud-controller-manager aws-cloud-controller-manager
+        --repo https://kubernetes.github.io/cloud-provider-aws
+        --version {{ ccm_chart_version }}
+        --namespace kube-system
+        -f /opt/lab/ccm-values.yaml
+      changed_when: true
+
+    - name: Wait for the cloud controller manager
+      ansible.builtin.command: >
+        {{ kubectl }} -n kube-system rollout status ds/aws-cloud-controller-manager --timeout=180s
+      changed_when: false
+
+    - name: Wait until the control plane node is initialised by the cloud provider
+      ansible.builtin.shell: >
+        {{ kubectl }} get nodes -o json
+        | jq -e '[.items[] | select(.spec.providerID == null
+        or ((.spec.taints // []) | any(.key == "node.cloudprovider.kubernetes.io/uninitialized")))] | length == 0'
+      register: cloud_init_done
+      until: cloud_init_done.rc == 0
+      retries: 30
+      delay: 5
+      changed_when: false

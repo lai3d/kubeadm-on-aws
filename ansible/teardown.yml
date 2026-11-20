@@ -1,0 +1,50 @@
+---
+# Run BEFORE `terraform destroy`. The NLB and the EBS volumes were created by
+# controllers inside the cluster, so Terraform does not know about them: left
+# behind, the NLB's network interfaces block deletion of the subnets/VPC and
+# the volumes keep costing money.
+- name: Remove cloud resources created from inside the cluster
+  hosts: control_plane
+  become: true
+  gather_facts: false
+  environment: "{{ helm_env }}"
+  tasks:
+    - name: Delete Gateways (their LoadBalancer Services and NLBs go with them)
+      ansible.builtin.command: "{{ kubectl }} delete gateways.gateway.networking.k8s.io --all -A --ignore-not-found --timeout=180s"
+      register: del_gw
+      failed_when: false
+
+    - name: Delete any remaining Services of type LoadBalancer
+      ansible.builtin.shell: |
+        {{ kubectl }} get svc -A -o json \
+          | jq -r '.items[] | select(.spec.type=="LoadBalancer") | "\(.metadata.namespace) \(.metadata.name)"' \
+          | while read -r ns name; do {{ kubectl }} -n "$ns" delete svc "$name" --timeout=180s; done
+      failed_when: false
+
+    - name: Uninstall monitoring (releases its volume claims)
+      ansible.builtin.command: helm uninstall kube-prometheus-stack -n monitoring --ignore-not-found --wait
+      failed_when: false
+
+    - name: Delete all PersistentVolumeClaims (the CSI driver deletes the EBS volumes)
+      ansible.builtin.command: "{{ kubectl }} delete pvc --all -A --timeout=180s"
+      failed_when: false
+
+    - name: Wait until no PersistentVolumes remain
+      ansible.builtin.shell: "{{ kubectl }} get pv -o json | jq -e '.items | length == 0'"
+      register: pvs
+      until: pvs.rc == 0
+      retries: 36
+      delay: 5
+      changed_when: false
+      failed_when: false
+
+    - name: Summary
+      ansible.builtin.shell: |
+        echo "LoadBalancer services left: $({{ kubectl }} get svc -A -o json | jq '[.items[] | select(.spec.type=="LoadBalancer")] | length')"
+        echo "PersistentVolumes left: $({{ kubectl }} get pv -o json | jq '.items | length')"
+      register: summary
+      changed_when: false
+
+    - name: Show summary
+      ansible.builtin.debug:
+        var: summary.stdout_lines

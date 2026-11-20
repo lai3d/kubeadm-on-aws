@@ -1,0 +1,217 @@
+---
+# In-place minor version upgrade with kubeadm, following the upstream order:
+#   1. control plane: kubeadm -> `kubeadm upgrade apply` -> kubelet
+#   2. workers, one at a time: kubeadm -> `kubeadm upgrade node` -> drain -> kubelet -> uncordon
+#   3. cloud controller manager (tracks the Kubernetes minor)
+# On EKS steps 1 and 3 are a single API call; here they are yours.
+
+- name: Upgrade the control plane
+  hosts: control_plane
+  become: true
+  gather_facts: false
+  vars:
+    target: "{{ kubernetes_upgrade_version }}"
+  tasks:
+    - name: Node name
+      ansible.builtin.command: hostname
+      register: node_name
+      changed_when: false
+
+    - name: State before the upgrade
+      ansible.builtin.shell: |
+        {{ kubectl }} get nodes -o wide
+        {{ kubectl }} version
+      register: before
+      changed_when: false
+
+    - name: Show state before
+      ansible.builtin.debug:
+        var: before.stdout_lines
+
+    - name: Back up etcd before touching anything
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ETCD=$(crictl --runtime-endpoint unix:///run/containerd/containerd.sock ps -q --name etcd | head -1)
+        crictl --runtime-endpoint unix:///run/containerd/containerd.sock exec "$ETCD" etcdctl \
+          --endpoints=https://127.0.0.1:2379 \
+          --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+          --cert=/etc/kubernetes/pki/etcd/server.crt \
+          --key=/etc/kubernetes/pki/etcd/server.key \
+          snapshot save /var/lib/etcd/pre-upgrade-{{ target }}.db
+      args:
+        executable: /bin/bash
+        creates: "/var/lib/etcd/pre-upgrade-{{ target }}.db"
+      register: etcd_backup
+
+    - name: Point apt at the target minor's repository
+      ansible.builtin.include_tasks: tasks/kubernetes-repo.yml
+      vars:
+        k8s_minor: "{{ target.split('.')[:2] | join('.') }}"
+
+    - name: Upgrade kubeadm first
+      ansible.builtin.apt:
+        name: "kubeadm={{ target }}-*"
+        allow_change_held_packages: true
+
+    - name: kubeadm upgrade plan
+      ansible.builtin.command: kubeadm upgrade plan v{{ target }}
+      register: plan
+      changed_when: false
+
+    - name: Show the plan
+      ansible.builtin.debug:
+        var: plan.stdout_lines
+
+    - name: kubeadm upgrade apply
+      ansible.builtin.command: kubeadm upgrade apply v{{ target }} --yes
+      register: apply
+
+    - name: Show apply output
+      ansible.builtin.debug:
+        var: apply.stdout_lines
+
+    - name: Drain the control plane node
+      ansible.builtin.command: >
+        {{ kubectl }} drain {{ node_name.stdout }}
+        --ignore-daemonsets --delete-emptydir-data --timeout=300s
+
+    - name: Upgrade kubelet and kubectl
+      ansible.builtin.apt:
+        name:
+          - "kubelet={{ target }}-*"
+          - "kubectl={{ target }}-*"
+        allow_change_held_packages: true
+
+    - name: Re-hold packages
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop: [kubelet, kubeadm, kubectl]
+
+    - name: Restart kubelet
+      ansible.builtin.systemd:
+        name: kubelet
+        state: restarted
+        daemon_reload: true
+
+    - name: Wait for the API server to come back
+      ansible.builtin.command: "{{ kubectl }} get --raw /readyz"
+      register: readyz
+      until: readyz.rc == 0
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    - name: Uncordon the control plane node
+      ansible.builtin.command: "{{ kubectl }} uncordon {{ node_name.stdout }}"
+
+    - name: Wait for the node to report the new version
+      ansible.builtin.shell: >
+        {{ kubectl }} get node {{ node_name.stdout }}
+        -o jsonpath='{.status.nodeInfo.kubeletVersion} {.status.conditions[?(@.type=="Ready")].status}'
+      register: cp_state
+      until: cp_state.stdout == 'v' ~ target ~ ' True'
+      retries: 30
+      delay: 5
+      changed_when: false
+
+- name: Upgrade the workers one at a time
+  hosts: workers
+  become: true
+  gather_facts: false
+  serial: 1
+  vars:
+    target: "{{ kubernetes_upgrade_version }}"
+    cp: "{{ groups['control_plane'][0] }}"
+  tasks:
+    - name: Node name
+      ansible.builtin.command: hostname
+      register: node_name
+      changed_when: false
+
+    - name: Point apt at the target minor's repository
+      ansible.builtin.include_tasks: tasks/kubernetes-repo.yml
+      vars:
+        k8s_minor: "{{ target.split('.')[:2] | join('.') }}"
+
+    - name: Upgrade kubeadm
+      ansible.builtin.apt:
+        name: "kubeadm={{ target }}-*"
+        allow_change_held_packages: true
+
+    - name: kubeadm upgrade node (refreshes the local kubelet configuration)
+      ansible.builtin.command: kubeadm upgrade node
+      register: upgrade_node
+
+    - name: Drain the worker
+      ansible.builtin.command: >
+        {{ kubectl }} drain {{ node_name.stdout }}
+        --ignore-daemonsets --delete-emptydir-data --timeout=300s
+      delegate_to: "{{ cp }}"
+      register: drain
+
+    - name: Show drain output
+      ansible.builtin.debug:
+        var: drain.stdout_lines
+
+    - name: Upgrade kubelet and kubectl
+      ansible.builtin.apt:
+        name:
+          - "kubelet={{ target }}-*"
+          - "kubectl={{ target }}-*"
+        allow_change_held_packages: true
+
+    - name: Re-hold packages
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop: [kubelet, kubeadm, kubectl]
+
+    - name: Restart kubelet
+      ansible.builtin.systemd:
+        name: kubelet
+        state: restarted
+        daemon_reload: true
+
+    - name: Uncordon the worker
+      ansible.builtin.command: "{{ kubectl }} uncordon {{ node_name.stdout }}"
+      delegate_to: "{{ cp }}"
+
+    - name: Wait for the node to report the new version and be Ready
+      ansible.builtin.shell: >
+        {{ kubectl }} get node {{ node_name.stdout }}
+        -o jsonpath='{.status.nodeInfo.kubeletVersion} {.status.conditions[?(@.type=="Ready")].status}'
+      delegate_to: "{{ cp }}"
+      register: worker_state
+      until: worker_state.stdout == 'v' ~ target ~ ' True'
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    # Let evicted workloads land again before the next node goes down.
+    - name: Wait for the sample app to be fully available again
+      ansible.builtin.command: "{{ kubectl }} -n demo rollout status deploy/echo --timeout=180s"
+      delegate_to: "{{ cp }}"
+      changed_when: false
+
+- name: Move the cloud controller manager to the matching minor
+  ansible.builtin.import_playbook: playbooks/04-cloud-provider.yml
+  vars:
+    ccm_image_tag_override: "{{ ccm_upgrade_image_tag }}"
+
+- name: Result
+  hosts: control_plane
+  become: true
+  gather_facts: false
+  tasks:
+    - name: State after the upgrade
+      ansible.builtin.shell: |
+        {{ kubectl }} get nodes -o wide
+        {{ kubectl }} version
+        {{ kubectl }} -n kube-system get pods -o wide
+      register: after
+      changed_when: false
+
+    - name: Show state after
+      ansible.builtin.debug:
+        var: after.stdout_lines

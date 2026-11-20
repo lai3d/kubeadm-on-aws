@@ -1,0 +1,66 @@
+---
+- name: Install kube-prometheus-stack (Prometheus, Alertmanager, Grafana)
+  hosts: control_plane
+  become: true
+  gather_facts: false
+  environment: "{{ helm_env }}"
+  tasks:
+    - name: Namespace
+      ansible.builtin.shell: >
+        {{ kubectl }} create namespace monitoring --dry-run=client -o yaml
+        | {{ kubectl }} apply -f -
+      changed_when: false
+
+    # Generated on the cluster and never written to this repo or the Ansible log.
+    - name: Generate a Grafana admin password (once)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if ! {{ kubectl }} -n monitoring get secret grafana-admin >/dev/null 2>&1; then
+          {{ kubectl }} -n monitoring create secret generic grafana-admin \
+            --from-literal=admin-user=admin \
+            --from-literal=admin-password="$(openssl rand -base64 24)" >/dev/null
+          echo created
+        fi
+      args:
+        executable: /bin/bash
+      register: grafana_secret
+      changed_when: "'created' in grafana_secret.stdout"
+
+    - name: Render values
+      ansible.builtin.template:
+        src: ../templates/monitoring-values.yaml.j2
+        dest: /opt/lab/monitoring-values.yaml
+        mode: "0644"
+
+    - name: Install kube-prometheus-stack
+      ansible.builtin.command: >
+        helm upgrade --install kube-prometheus-stack kube-prometheus-stack
+        --repo https://prometheus-community.github.io/helm-charts
+        --version {{ kube_prometheus_stack_version }}
+        --namespace monitoring
+        -f /opt/lab/monitoring-values.yaml
+        --timeout 10m
+      changed_when: true
+
+    - name: Wait for Grafana, the operator and Prometheus
+      ansible.builtin.shell: |
+        set -e
+        {{ kubectl }} -n monitoring rollout status deploy/kube-prometheus-stack-grafana --timeout=300s
+        {{ kubectl }} -n monitoring rollout status deploy/kube-prometheus-stack-operator --timeout=300s
+        for i in $(seq 1 30); do
+          {{ kubectl }} -n monitoring get sts prometheus-kube-prometheus-stack-prometheus >/dev/null 2>&1 && break
+          sleep 5
+        done
+        {{ kubectl }} -n monitoring rollout status sts/prometheus-kube-prometheus-stack-prometheus --timeout=420s
+      changed_when: false
+
+    - name: Render Grafana route
+      ansible.builtin.template:
+        src: ../templates/grafana-route.yaml.j2
+        dest: /opt/lab/grafana-route.yaml
+        mode: "0644"
+
+    - name: Expose Grafana through the Gateway (host-based routing)
+      ansible.builtin.command: "{{ kubectl }} apply -f /opt/lab/grafana-route.yaml"
+      register: apply
+      changed_when: "'created' in apply.stdout or 'configured' in apply.stdout"

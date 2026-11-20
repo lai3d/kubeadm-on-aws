@@ -1,0 +1,20 @@
+---
+- name: Deploy the sample app (NodePort)
+  hosts: control_plane
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Copy manifest
+      ansible.builtin.copy:
+        src: ../../k8s/demo-app.yaml
+        dest: /opt/lab/demo-app.yaml
+        mode: "0644"
+
+    - name: Apply manifest
+      ansible.builtin.command: "{{ kubectl }} apply -f /opt/lab/demo-app.yaml"
+      register: apply
+      changed_when: "'created' in apply.stdout or 'configured' in apply.stdout"
+
+    - name: Wait for the rollout
+      ansible.builtin.command: "{{ kubectl }} -n demo rollout status deploy/echo --timeout=180s"
+      changed_when: false

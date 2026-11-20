@@ -1,0 +1,49 @@
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: InitConfiguration
+localAPIEndpoint:
+  advertiseAddress: {{ private_ip }}
+  bindPort: 6443
+nodeRegistration:
+  kubeletExtraArgs:
+    # Hand node lifecycle (addresses, zone labels, providerID) to the external
+    # AWS cloud controller. The node stays tainted "uninitialized" until it runs.
+    - name: cloud-provider
+      value: external
+# Cilium replaces kube-proxy with eBPF, so never install it.
+skipPhases:
+  - addon/kube-proxy
+---
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: ClusterConfiguration
+clusterName: {{ cluster_name }}
+kubernetesVersion: v{{ kubernetes_version }}
+# A stable endpoint is what makes adding control plane nodes possible later.
+# Here it is simply the private IP; with HA it would be an internal NLB.
+controlPlaneEndpoint: "{{ control_plane_private_ip }}:6443"
+networking:
+  podSubnet: {{ pod_cidr }}
+  serviceSubnet: {{ service_cidr }}
+apiServer:
+  certSANs:
+    # Without the public IP in the certificate, kubectl from a laptop fails TLS.
+    - "{{ control_plane_public_ip }}"
+    - "{{ control_plane_private_ip }}"
+# kubeadm binds these to 127.0.0.1 by default, which makes them invisible to
+# Prometheus. The security group limits access to the cluster's own nodes.
+controllerManager:
+  extraArgs:
+    - name: bind-address
+      value: 0.0.0.0
+scheduler:
+  extraArgs:
+    - name: bind-address
+      value: 0.0.0.0
+etcd:
+  local:
+    extraArgs:
+      - name: listen-metrics-urls
+        value: http://0.0.0.0:2381
+---
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+cgroupDriver: systemd

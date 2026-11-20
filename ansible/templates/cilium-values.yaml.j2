@@ -1,0 +1,29 @@
+# kube-proxy is not installed (kubeadm skipPhases), so Cilium must be told
+# where the API server is - it cannot use the kubernetes Service to find it.
+kubeProxyReplacement: true
+k8sServiceHost: "{{ control_plane_private_ip }}"
+k8sServicePort: 6443
+
+# VXLAN overlay: pod IPs never appear on the VPC network, so no VPC route
+# table entries and no dependency on source/dest check. Costs 50 bytes of MTU
+# (auto-derived: 9001 on EC2 -> 8951 for pods).
+routingMode: tunnel
+tunnelProtocol: vxlan
+
+ipam:
+  mode: cluster-pool
+  operator:
+    # The chart default is 10.0.0.0/8, which swallows the 10.0.0.0/16 VPC.
+    clusterPoolIPv4PodCIDRList: ["{{ pod_cidr }}"]
+    clusterPoolIPv4MaskSize: 24
+
+# Built-in Gateway API controller (Envoy) - replaces a separate ingress controller.
+gatewayAPI:
+  enabled: true
+
+operator:
+  replicas: 1
+
+hubble:
+  relay:
+    enabled: true

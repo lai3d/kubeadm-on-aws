@@ -1,0 +1,42 @@
+# kube-proxy does not exist in this cluster (Cilium replaces it).
+kubeProxy:
+  enabled: false
+
+# kubeadm's etcd serves plain-HTTP metrics on 2381 (see listen-metrics-urls in
+# the kubeadm config); the chart default expects 2379 with client certs.
+kubeEtcd:
+  service:
+    port: 2381
+    targetPort: 2381
+
+prometheus:
+  prometheusSpec:
+    retention: 2d
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+    # Pick up ServiceMonitors from any namespace, not just this release's.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp3
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 10Gi
+
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+
+grafana:
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password

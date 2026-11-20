@@ -1,0 +1,9 @@
+---
+# MVP: a working kubeadm cluster with pod networking, cloud integration and a
+# sample app on a NodePort.
+- import_playbook: playbooks/01-nodes.yml
+- import_playbook: playbooks/02-control-plane.yml
+- import_playbook: playbooks/03-cni.yml
+- import_playbook: playbooks/04-cloud-provider.yml
+- import_playbook: playbooks/05-workers.yml
+- import_playbook: playbooks/06-demo-app.yml

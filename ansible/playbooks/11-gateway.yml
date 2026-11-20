@@ -1,0 +1,30 @@
+---
+- name: Expose the sample app through a Gateway backed by an AWS NLB
+  hosts: control_plane
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Render Gateway and HTTPRoute
+      ansible.builtin.template:
+        src: ../templates/gateway.yaml.j2
+        dest: /opt/lab/gateway.yaml
+        mode: "0644"
+
+    - name: Apply
+      ansible.builtin.command: "{{ kubectl }} apply -f /opt/lab/gateway.yaml"
+      register: apply
+      changed_when: "'created' in apply.stdout or 'configured' in apply.stdout"
+
+    - name: Wait for the NLB hostname to be assigned to the Gateway
+      ansible.builtin.command: >
+        {{ kubectl }} -n gateway get gateway public
+        -o jsonpath='{.status.addresses[0].value}'
+      register: gw_address
+      until: gw_address.stdout | length > 0
+      retries: 60
+      delay: 5
+      changed_when: false
+
+    - name: Gateway address
+      ansible.builtin.debug:
+        msg: "NLB: http://{{ gw_address.stdout }}/hostname (targets take ~2-3 min to become healthy)"

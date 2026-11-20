@@ -1,0 +1,27 @@
+---
+- name: Install the AWS EBS CSI driver
+  hosts: control_plane
+  become: true
+  gather_facts: false
+  environment: "{{ helm_env }}"
+  tasks:
+    - name: Render values
+      ansible.builtin.template:
+        src: ../templates/ebs-csi-values.yaml.j2
+        dest: /opt/lab/ebs-csi-values.yaml
+        mode: "0644"
+
+    - name: Install aws-ebs-csi-driver
+      ansible.builtin.command: >
+        helm upgrade --install aws-ebs-csi-driver aws-ebs-csi-driver
+        --repo https://kubernetes-sigs.github.io/aws-ebs-csi-driver
+        --version {{ ebs_csi_chart_version }}
+        --namespace kube-system
+        -f /opt/lab/ebs-csi-values.yaml
+      changed_when: true
+
+    - name: Wait for the driver
+      ansible.builtin.shell: |
+        {{ kubectl }} -n kube-system rollout status deploy/ebs-csi-controller --timeout=300s
+        {{ kubectl }} -n kube-system rollout status ds/ebs-csi-node --timeout=300s
+      changed_when: false

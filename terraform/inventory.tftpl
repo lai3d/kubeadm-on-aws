@@ -1,0 +1,17 @@
+[control_plane]
+cp1 ansible_host=${control_plane.public_ip} private_ip=${control_plane.private_ip}
+
+[workers]
+%{ for i, w in workers ~}
+worker${i + 1} ansible_host=${w.public_ip} private_ip=${w.private_ip}
+%{ endfor ~}
+
+[all:vars]
+ansible_user=ubuntu
+ansible_ssh_private_key_file=${ssh_key}
+cluster_name=${cluster_name}
+aws_region=${region}
+admin_cidr=${admin_cidr}
+vpc_cidr=${vpc_cidr}
+control_plane_private_ip=${control_plane.private_ip}
+control_plane_public_ip=${control_plane.public_ip}
