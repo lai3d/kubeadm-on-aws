@@ -13,6 +13,40 @@ parts of Kubernetes that a managed service hides. The
 
 ## What gets built
 
+```mermaid
+flowchart TB
+    ws["Workstation<br/>terraform · ansible · curl"]
+
+    subgraph vpc["VPC 10.0.0.0/16 · ap-southeast-1"]
+        nlb["AWS NLB<br/>created by the cloud controller manager<br/>from a Gateway"]
+
+        subgraph aza["Public subnet · AZ a"]
+            cp["Control plane · t3.medium<br/>etcd · kube-apiserver<br/>scheduler · controller-manager<br/>AWS cloud controller manager<br/>Cilium"]
+            w1["Worker 1 · t3.medium<br/>kubelet · containerd<br/>Cilium + Envoy · EBS CSI"]
+        end
+
+        subgraph azb["Public subnet · AZ b"]
+            w2["Worker 2 · t3.medium<br/>kubelet · containerd<br/>Cilium + Envoy · EBS CSI"]
+        end
+
+        ebs[("EBS gp3 volumes<br/>zonal, attached by the CSI driver")]
+    end
+
+    ws -- "SSH 22 · API 6443<br/>admin IP only" --> cp
+    ws -- "NodePort 30080<br/>admin IP only" --> w1
+    ws -- "HTTP 80<br/>admin IP only" --> nlb
+    nlb -- "NodePort" --> w1
+    nlb -- "NodePort" --> w2
+    cp -. "Cilium VXLAN overlay<br/>pods 10.244.0.0/16" .- w1
+    w1 -. "VXLAN" .- w2
+    cp -. "AWS API via instance profile" .-> nlb
+    w1 --- ebs
+    w2 --- ebs
+```
+
+<details>
+<summary>Same diagram as plain text</summary>
+
 ```
                       workstation (terraform, ansible, curl)
                           │ SSH 22 / API 6443 / NodePort          │ HTTP 80
@@ -32,6 +66,8 @@ parts of Kubernetes that a managed service hides. The
 │                                                       EBS gp3 volumes (CSI)  │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
+
+</details>
 
 | Layer | Choice |
 |-------|--------|
